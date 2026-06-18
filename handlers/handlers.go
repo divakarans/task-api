@@ -1,124 +1,201 @@
 package handlers
 
 import (
-	"encoding/json"
+	"database/sql"
 	"net/http"
-	"slices"
 	"strconv"
+	"time"
+
 	"task-api/models"
 	"task-api/store"
-	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
-func GetTasksHandler(w http.ResponseWriter, r *http.Request) {
-
-	json.NewEncoder(w).Encode(store.Tasks)
-	return
-
+type Handler struct {
+	store *store.Store
 }
 
-func CreateTasksHandler(w http.ResponseWriter, r *http.Request) {
-
-	var tsk models.Task
-
-	err := json.NewDecoder(r.Body).Decode(&tsk)
-	if err != nil {
-		http.Error(w, "Not found", http.StatusBadRequest)
-		return
+func New(store *store.Store) *Handler {
+	return &Handler{
+		store: store,
 	}
-
-	if tsk.Title == "" {
-		http.Error(w, "Input required", http.StatusBadRequest)
-		return
-
-	} else if tsk.Status == "" {
-		tsk.Status = "pending"
-
-	} else if tsk.Status != "pending" && tsk.Status != "done" && tsk.Status != "in_progress" {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-
-	tsk.ID = store.NextID
-	tsk.CreatedAt = time.Now()
-	store.NextID++
-	store.Tasks = append(store.Tasks, tsk)
-	json.NewEncoder(w).Encode(tsk)
-	return
 }
 
-func GetTasksByIdHandler(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	Idnum, err := strconv.Atoi(id)
+func (h *Handler) GetTasksHandler(c *gin.Context) {
+	tasks, err := h.store.GetAll()
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Internal server error",
+		})
 		return
 	}
 
-	for i := 0; i < len(store.Tasks); i++ {
-		if Idnum == store.Tasks[i].ID {
-			json.NewEncoder(w).Encode(store.Tasks[i])
+	c.JSON(http.StatusOK, tasks)
+}
+
+func (h *Handler) CreateTasksHandler(c *gin.Context) {
+	var task models.Task
+
+	err := c.ShouldBindJSON(&task)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid JSON",
+		})
+		return
+	}
+
+	if task.Title == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Title is required",
+		})
+		return
+	}
+
+	if task.Status == "" {
+		task.Status = "pending"
+	}
+
+	if task.Status != "pending" &&
+		task.Status != "in_progress" &&
+		task.Status != "done" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid status",
+		})
+		return
+	}
+
+	task.CreatedAt = time.Now()
+
+	err = h.store.Create(task)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to create task",
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, task)
+}
+
+func (h *Handler) GetTasksByIdHandler(c *gin.Context) {
+	id := c.Param("id")
+
+	idNum, err := strconv.Atoi(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid ID",
+		})
+		return
+	}
+
+	task, err := h.store.GetByID(idNum)
+
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Task not found",
+		})
+		return
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Internal server error",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
+}
+
+func (h *Handler) DeleteTasksByIdHandler(c *gin.Context) {
+	id := c.Param("id")
+
+	idNum, err := strconv.Atoi(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid ID",
+		})
+		return
+	}
+
+	err = h.store.DeleteByID(idNum)
+
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Task not found",
+		})
+		return
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Internal server error",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Task deleted successfully",
+	})
+}
+
+func (h *Handler) UpdateTasksByIdHandler(c *gin.Context) {
+	id := c.Param("id")
+
+	idNum, err := strconv.Atoi(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid ID",
+		})
+		return
+	}
+
+	var task models.Task
+
+	err = c.ShouldBindJSON(&task)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid JSON",
+		})
+		return
+	}
+
+	if task.Status != "" {
+		if task.Status != "pending" &&
+			task.Status != "in_progress" &&
+			task.Status != "done" {
+
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Invalid status",
+			})
 			return
 		}
 	}
-	http.Error(w, "no task id found", http.StatusNotFound)
-}
 
-func DeleteTasksByIdHandler(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	err = h.store.UpdateByID(idNum, task)
 
-	Idnum, err := strconv.Atoi(id)
-	if err != nil {
-		http.Error(w, "invalid Id", http.StatusBadRequest)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Task not found",
+		})
 		return
 	}
-	for i := 0; i < len(store.Tasks); i++ {
-		if Idnum == store.Tasks[i].ID {
-			store.Tasks = slices.Delete(store.Tasks, i, i+1)
 
-			w.WriteHeader(http.StatusOK)
-			return
-
-		}
-	}
-	http.Error(w, "no task id found", http.StatusNotFound)
-}
-
-func UpdateTasksByIdHandler(w http.ResponseWriter, r *http.Request) {
-
-	var tsk models.Task
-	err := json.NewDecoder(r.Body).Decode(&tsk)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Internal server error",
+		})
 		return
 	}
-	id := r.PathValue("id")
-	Idnum, err := strconv.Atoi(id)
+
+	updatedTask, err := h.store.GetByID(idNum)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Task updated successfully",
+		})
 		return
 	}
-	for i := 0; i < len(store.Tasks); i++ {
-		if Idnum == store.Tasks[i].ID {
 
-			if tsk.Title != "" {
-				store.Tasks[i].Title = tsk.Title
-			}
-			if tsk.Status != "" {
-
-				if tsk.Status != "pending" && tsk.Status != "in_progress" && tsk.Status != "done" {
-
-					http.Error(w, "Invalid status", http.StatusBadRequest)
-					return
-				}
-
-				store.Tasks[i].Status = tsk.Status
-			}
-			json.NewEncoder(w).Encode(store.Tasks[i])
-			return
-		}
-	}
-	http.Error(w, "no task id found", http.StatusNotFound)
-
+	c.JSON(http.StatusOK, updatedTask)
 }

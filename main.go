@@ -1,18 +1,32 @@
 package main
 
 import (
-	"net/http"
+	"log"
+	"task-api/db"
 	"task-api/handlers"
+	"task-api/store"
+
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /tasks", handlers.GetTasksHandler)
-	mux.HandleFunc("POST /tasks", handlers.CreateTasksHandler)
-	mux.HandleFunc("GET /tasks/{id}", handlers.GetTasksByIdHandler)
-	mux.HandleFunc("DELETE /tasks/{id}", handlers.DeleteTasksByIdHandler)
-	mux.HandleFunc("PUT /tasks/{id}", handlers.UpdateTasksByIdHandler)
+	database, err := db.InitDB("tasks.db")
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	http.ListenAndServe(":8080", mux)
+	taskStore := store.New(database)
+
+	handler := handlers.New(taskStore)
+
+	r := gin.Default()
+
+	r.GET("/tasks", handler.GetTasksHandler)
+	r.POST("/tasks", handler.CreateTasksHandler)
+	r.GET("/tasks/:id", handler.GetTasksByIdHandler)
+	r.PUT("/tasks/:id", handler.UpdateTasksByIdHandler)
+	r.DELETE("/tasks/:id", handler.DeleteTasksByIdHandler)
+
+	r.Run(":8080")
 }
